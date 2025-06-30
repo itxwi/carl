@@ -10,6 +10,9 @@ import sys
 // Helpers //
 //=========//
 """
+async def getUsername(userid):
+    user = await client.fetch_user(userid)
+    return user
 
 def readSecrets():
     """
@@ -19,17 +22,45 @@ def readSecrets():
         secrets = json.load(file)
     return secrets
 
-def setIdentity(message, powerlevel = 0 ,money = 0, chathistory = []):
-    userinfo = {
-        "userid": message.author.id,
-        "power_level": powerlevel,
-        "money": money,
-        "chathistory": chathistory
-    }
-    p = json.dumps()
+async def setIdentity(userid, powerlevel = 0, money = 0, chathistory = []):
+    # Getter
+    try:
+        with open('identity.json', 'r') as file:
+            identityfile = json.load(file)
+    except:
+        identityfile = {}
 
-def getIdentity():
-    pass
+    username = await getUsername(userid)
+
+    #Processing
+    if str(userid) not in identityfile:
+        userdata = {
+            'username': str(username),
+            "power_level": powerlevel,
+            "money": money,
+            "chathistory": chathistory
+        }
+        identityfile[str(userid)] = userdata
+    
+        # Setter
+        with open('identity.json', 'w') as file:
+            json.dump(identityfile, file,indent=4)
+
+
+async def getIdentity(userid,attempt = 0):
+    try:
+        with open('identity.json', 'r') as file:
+            identityfile = json.load(file)
+    except:
+        # User is not identified
+        await setIdentity(userid)
+        if attempt < 2:
+            getIdentity(userid, attempt = attempt+1)
+
+
+    return identityfile[userid]
+
+
 
 """
 //===============//
@@ -38,9 +69,7 @@ def getIdentity():
 """
 
 # Discord
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
+intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 
 # Groq
@@ -102,13 +131,6 @@ class Commandlist:
         lisst += "```"
         await message.channel.send(lisst)
 
-class Signup:
-    def __init__(self):
-        self.description = "signs the user up for somethin"
-    async def command(self, message, parameter):
-        await message.channel.send("beep boop boop beep... request accepted probably")
-        setIdentity(message)
-
 class Talk:
     def __init__(self):
         self.description = "talks with the bot using ai"
@@ -132,7 +154,6 @@ commands = {
     "dnd": Dnd(),
     "ping": Ping(),
     "commands":Commandlist(),
-    "signup": Signup(),
     "talk": Talk(),
     "kys": Kys(),
 }
@@ -146,6 +167,12 @@ commands = {
 @client.event
 async def on_ready():
     print(f'{client.user} is online!')
+
+    #Registering all users
+
+    for guild in client.guilds:
+        for member in guild.members:
+            await setIdentity(member.id)
 
 @client.event
 async def on_message(message):
@@ -161,8 +188,10 @@ async def on_message(message):
     if message.content.lower().startswith('carl!') and processed_command in commands.keys():
 
         #get user power before doing anything
-
-        await commands[processed_command].command(message, processed_parameters)
+        if commands[processed_command].power<=(await getIdentity(str(message.author.id)))['power_level']:
+            await commands[processed_command].command(message, processed_parameters)
+        else:
+            await message.channel.send("You dont need the power level")
     
 
 

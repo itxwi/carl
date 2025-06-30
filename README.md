@@ -10,5 +10,6 @@ hood slang response
 stock market
 pokemon and fighting
 gambling blackjack
+make powerwork
 
 (done )take parameter inputs
