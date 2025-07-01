@@ -24,7 +24,7 @@ def readSecrets():
         secrets = json.load(file)
     return secrets
 
-async def setIdentity(userid, powerlevel=None, money=None, chathistory=None,lastclaimed=None):
+async def setIdentity(userid, powerlevel=None, money=None, chathistory=None,lastclaimed=None, inventory = None):
     """
     Sets or updates user identity. If a value is None, keeps the old value or uses a default.
     """
@@ -35,7 +35,7 @@ async def setIdentity(userid, powerlevel=None, money=None, chathistory=None,last
         identityfile = {}
 
     userid = str(userid)
-    # Get old values or defaults
+    # Get old values or defaults, get(key, value if key dne)
     old = identityfile.get(userid, {})
 
 
@@ -47,6 +47,8 @@ async def setIdentity(userid, powerlevel=None, money=None, chathistory=None,last
         chathistory = old.get("chathistory", [])
     if lastclaimed is None:
         lastclaimed = old.get("lastclaimed", time.time())
+    if inventory is None:
+        inventory = old.get("inventory",{})
 
     username = str(await getUsername(userid))
 
@@ -55,7 +57,8 @@ async def setIdentity(userid, powerlevel=None, money=None, chathistory=None,last
         "power_level": powerlevel,
         "money": money,
         "chathistory": chathistory,
-        "lastclaimed": lastclaimed
+        "lastclaimed": lastclaimed,
+        "inventory": inventory
     }
 
     identityfile[userid] = userdata
@@ -73,7 +76,7 @@ async def getIdentity(userid):
     if userid not in identityfile:
         # User was not registered
 
-        await setIdentity(userid, powerlevel=0, money=0, chathistory=[])
+        await setIdentity(userid, powerlevel=0, money=0, chathistory=[], lastclaimed=0,inventory={})
 
         # Now reload
         with open('identity.json', 'r') as file:
@@ -167,7 +170,7 @@ class Commandlist:
 class Talk:
     def __init__(self):
         self.description = "talks with the bot using ai"
-        self.power = 1
+        self.power = 0
 
     async def command(self, message, parameter):
         chathistory = (await getIdentity(str(message.author.id)))["chathistory"]
@@ -207,11 +210,46 @@ class Kys:
 class ClearHistory():
     def __init__(self):
         self.description = "clears chat history with the bot"
-        self.power = 1
+        self.power = 0
     
     async def command(self,message,parameter):
         await setIdentity(message.author.id, chathistory=[])
         await message.channel.send("bonk my head hurt")
+
+class DailyClaim():
+    def __init__(self):
+        self.description = "claim ur daily 500 dollar"
+        self.power = 0
+
+    async def command(self,message,parameter):
+        lastclaimed = (await getIdentity(message.author.id)).get("lastclaimed",time.time())
+        if time.time()-lastclaimed > 24*60*60:
+            await setIdentity(message.author.id,lastclaimed=time.time()
+                              )
+            await addMoney(message.author.id,500)
+            await message.channel.send("claimed")
+        else:
+            await message.channel.send(f"wait {(24*60*60)-round(time.time()-lastclaimed,1)} more seconds")
+
+class Inventory():
+    def __init__(self):
+        self.description = "check inventory"
+        self.power = 0
+    
+    async def command(self,message,parameter):
+        playerinventory = (await getIdentity(message.author.id)).get("inventory", {})
+        playermoney = (await getIdentity(message.author.id)).get("money", 0)
+
+        lisst = "```"
+        for item in playerinventory:
+            amount = playerinventory[item]
+            lisst += f"{item}: {amount} \n"
+            #await message.channel.send(f"{command} description: {commands[command].description}")
+        lisst+=f"\n"
+        lisst+=f"amount of cash: {playermoney}"
+        lisst += "```"
+
+        await message.channel.send(lisst)
 
         
 commands = {
@@ -220,6 +258,8 @@ commands = {
     "commands":Commandlist(),
     "clearhistory": ClearHistory(),
     "talk": Talk(),
+    "claim": DailyClaim(),
+    "inv": Inventory(),
     "kys": Kys(),
 }
 
@@ -259,7 +299,42 @@ async def on_message(message):
             await commands[processed_command].command(message, processed_parameters)
         else:
             await message.channel.send(f"if u a broke boy jus say so, your power is {userpower}, required power is {commands[processed_command].power}")
-    
+
+    # grammar correction software
+    if "me and" in message.content:
+        corrected_subject = askGroq(f"""
+        Check the grammar of this sentence, which includes the phrase "me and ___".
+
+        Goal:
+        - Determine if "me and ___" should be corrected to "___ and I".
+        - Only apply the correction if "me and ___" is used as the subject of the sentence.
+        - If the phrase is used as an object (e.g., someone saw me and my friends), no correction is needed.
+
+        Instructions:
+        - If a correction is needed, return only the subject part before "I" (e.g., "my friends", "the dog and the lady").
+        - If no correction is needed, return exactly: pineapple123
+
+        Examples:
+        1. "me and my friends went to the store" → my friends  
+        (Because "me went to the store" is incorrect.)
+        2. "me and the dog ran home" → the dog  
+        (Because "me ran home" is incorrect.)
+        3. "they saw me and my friends at the park" → pineapple123  
+        (Because "they saw me" is correct.)
+        4. "the monster was going to eat me and my friends" → pineapple123  
+        (Because "eat me" is correct.)
+
+        Respond **only** with:
+        - the subject before "I" (if correction is needed), or  
+        - "pineapple123" (if no correction is needed)
+
+        Sentence: {message.content}
+
+        Complete this sentence: "erm actually it's ____ and I"
+        """)
+
+        if "pineapple123" not in corrected_subject:
+            await message.channel.send(f"erm actually its {corrected_subject} and I")
 
 
 """
