@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import json
 from groq import Groq
+import time
 import random
 import sys
 
@@ -10,6 +11,7 @@ import sys
 // Helpers //
 //=========//
 """
+
 async def getUsername(userid):
     user = await client.fetch_user(userid)
     return user
@@ -22,44 +24,74 @@ def readSecrets():
         secrets = json.load(file)
     return secrets
 
-async def setIdentity(userid, powerlevel = 0, money = 0, chathistory = []):
-    # Getter
+async def setIdentity(userid, powerlevel=None, money=None, chathistory=None,lastclaimed=None):
+    """
+    Sets or updates user identity. If a value is None, keeps the old value or uses a default.
+    """
     try:
         with open('identity.json', 'r') as file:
             identityfile = json.load(file)
-    except:
+    except Exception:
         identityfile = {}
 
-    username = await getUsername(userid)
-
-    #Processing
-    if str(userid) not in identityfile:
-        userdata = {
-            'username': str(username),
-            "power_level": powerlevel,
-            "money": money,
-            "chathistory": chathistory
-        }
-        identityfile[str(userid)] = userdata
-    
-        # Setter
-        with open('identity.json', 'w') as file:
-            json.dump(identityfile, file,indent=4)
+    userid = str(userid)
+    # Get old values or defaults
+    old = identityfile.get(userid, {})
 
 
-async def getIdentity(userid,attempt = 0):
+    if powerlevel is None:
+        powerlevel = old.get("power_level", 0)
+    if money is None:
+        money = old.get("money", 0)
+    if chathistory is None:
+        chathistory = old.get("chathistory", [])
+    if lastclaimed is None:
+        lastclaimed = old.get("lastclaimed", time.time())
+
+    username = str(await getUsername(userid))
+
+    userdata = {
+        'username': username,
+        "power_level": powerlevel,
+        "money": money,
+        "chathistory": chathistory,
+        "lastclaimed": lastclaimed
+    }
+
+    identityfile[userid] = userdata
+    with open('identity.json', 'w') as file:
+        json.dump(identityfile, file, indent=4)
+
+
+async def getIdentity(userid):
+    userid = str(userid)
     try:
         with open('identity.json', 'r') as file:
             identityfile = json.load(file)
-    except:
-        # User is not identified
-        await setIdentity(userid)
-        if attempt < 2:
-            getIdentity(userid, attempt = attempt+1)
+    except Exception:
+        identityfile = {}
+    if userid not in identityfile:
+        # User was not registered
 
+        await setIdentity(userid, powerlevel=0, money=0, chathistory=[])
 
+        # Now reload
+        with open('identity.json', 'r') as file:
+            identityfile = json.load(file)
     return identityfile[userid]
 
+async def addMoney(userid, money=0):
+    user = await getIdentity(userid)
+    usermoney = user["money"] + money
+    await setIdentity(userid, money=usermoney)
+
+
+async def removeMoney(userid, money=0):
+    user = await getIdentity(userid)
+    usermoney = user["money"] - money
+    await setIdentity(userid, money=usermoney)
+
+#async def setMoney(u)
 
 
 """
@@ -81,13 +113,14 @@ groqclient = Groq(api_key=readSecrets()["groq_token"])
 //==========//
 """
 
-def askGroq(question):
+def askGroq(question,messages = None):
     """
     Takes in a string and returns a string
     """
-    messages = [
-    {"role": "user", "content": f"{question}"}
-    ]
+    if messages == None:
+        messages = [
+        {"role": "user", "content": f"{question}"}
+        ]
     response = groqclient.chat.completions.create(
     model="llama3-70b-8192",
     messages=messages
@@ -137,7 +170,28 @@ class Talk:
         self.power = 1
 
     async def command(self, message, parameter):
-        groqresponse = askGroq(' '.join(parameter))
+        chathistory = (await getIdentity(str(message.author.id)))["chathistory"]
+        
+
+                   
+        question = ' '.join(parameter)
+        chathistory.append(
+            {
+                "role": "user",
+                "content": question
+            }
+        )
+
+        groqresponse = askGroq(question,chathistory)
+        chathistory.append(
+            {
+                "role": "assistant",
+                "content": groqresponse
+            }
+        )
+
+        
+        await setIdentity(str(message.author.id),chathistory=chathistory)
         await message.channel.send(groqresponse)
 
         
@@ -149,11 +203,22 @@ class Kys:
     async def command(self,message, parameter):
         await message.channel.send(":C")
         sys.exit()
+
+class ClearHistory():
+    def __init__(self):
+        self.description = "clears chat history with the bot"
+        self.power = 1
+    
+    async def command(self,message,parameter):
+        await setIdentity(message.author.id, chathistory=[])
+        await message.channel.send("bonk my head hurt")
+
         
 commands = {
     "dnd": Dnd(),
     "ping": Ping(),
     "commands":Commandlist(),
+    "clearhistory": ClearHistory(),
     "talk": Talk(),
     "kys": Kys(),
 }
@@ -168,11 +233,12 @@ commands = {
 async def on_ready():
     print(f'{client.user} is online!')
 
-    #Registering all users
+    # #Registering all users
 
-    for guild in client.guilds:
-        for member in guild.members:
-            await setIdentity(member.id)
+    # for guild in client.guilds:
+    #     for member in guild.members:
+    #         print(member)
+    #         await setIdentity(member.id,powerlevel=None,money=None,chathistory=None)
 
 @client.event
 async def on_message(message):
@@ -188,10 +254,11 @@ async def on_message(message):
     if message.content.lower().startswith('carl!') and processed_command in commands.keys():
 
         #get user power before doing anything
-        if commands[processed_command].power<=(await getIdentity(str(message.author.id)))['power_level']:
+        userpower = (await getIdentity(str(message.author.id)))['power_level']
+        if commands[processed_command].power<=userpower:
             await commands[processed_command].command(message, processed_parameters)
         else:
-            await message.channel.send("You dont need the power level")
+            await message.channel.send(f"if u a broke boy jus say so, your power is {userpower}, required power is {commands[processed_command].power}")
     
 
 
